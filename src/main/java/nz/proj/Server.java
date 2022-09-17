@@ -32,12 +32,11 @@ public class Server {
         SqlClient sqlClient = MySQLPool.client(sqlConnOption, new PoolOptions().setMaxSize(5));
 
         Map<String, ArrayList<Player>> waiting = new HashMap<>();
-        ArrayList<Player> onlinePlayers = new ArrayList<>();
         ArrayList<Room> rooms = new ArrayList<>();
         Random seed = new Random();
         var server = vertx.createHttpServer().webSocketHandler(websocket -> {
+            System.out.println("connected");
             websocket.handler(buffer -> {
-                System.out.println("connected");
                 Bundle message = buffer2Bundle(buffer);
                 if (message.getName().equals("login")) {
                     sqlClient.query("select * from players.playersInfo where name = '%s' and password = '%s'".formatted(message.get("name"), message.get("pwd")))
@@ -94,6 +93,43 @@ public class Server {
                             p.getSocket().write(bundle2Buffer(message));
                         }
                     }
+                } else if (message.getName().equals("close")) {
+                    String name = message.get("name");
+                    websocket.closeHandler(h -> {
+                        int temp = 0;
+                        for (ArrayList<Player> players : waiting.values()) {
+                            for (Player player : players) {
+                                if (player.getName().equals(name)) {
+                                    temp = 1;
+                                    System.out.println(player.getName() + "log out");
+                                    players.remove(player);
+                                    break;
+                                }
+                            }
+                            if (temp == 1) {
+                                temp = 0;
+                                break;
+                            }
+                        }
+
+                        for (Room room : rooms) {
+                            if (room.getNames().contains(name)) {
+                                for (Player p : room.getPlayers()) {
+                                    if (!p.getName().equals(name)) {
+                                        temp = 1;
+                                        Bundle b = new Bundle("roomStop");
+                                        p.getSocket().write(bundle2Buffer(b));
+                                        rooms.remove(room);
+                                        break;
+                                    }
+                                }
+                            }
+                            if (temp == 1) {
+                                break;
+                            }
+                        }
+                    });
+                    websocket.close();
                 }
             });
         });
