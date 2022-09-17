@@ -130,6 +130,25 @@ public class Server {
                         }
                     });
                     websocket.close();
+                } else if (message.getName().equals("roomStop")) {
+                    int temp = 0;
+                    String name = message.getName();
+                    for (Room room : rooms) {
+                        if (room.getNames().contains(name)) {
+                            for (Player p : room.getPlayers()) {
+                                if (!p.getName().equals(name)) {
+                                    temp = 1;
+                                    Bundle b = new Bundle("roomStop");
+                                    p.getSocket().write(bundle2Buffer(b));
+                                    rooms.remove(room);
+                                    break;
+                                }
+                            }
+                        }
+                        if (temp == 1) {
+                            break;
+                        }
+                    }
                 }
             });
         });
