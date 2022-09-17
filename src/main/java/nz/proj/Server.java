@@ -42,14 +42,23 @@ public class Server {
                     sqlClient.query("select * from players.playersInfo where name = '%s' and password = '%s'".formatted(message.get("name"), message.get("pwd")))
                             .execute(tab -> accountAct(websocket, "login", tab));
                 } else if (message.getName().equals("signup")) {
-                    int[] max = new int[1];
                     sqlClient.query("select max(id) from players.playersInfo")
-                            .execute(tab -> tab.result().forEach(row -> max[0] = row.getInteger("max(id)")));
-                    sqlClient.query("insert into players.playersInfo values (%d, %s, %s, %d)".formatted(max[0], message.get("name"), message.get("pwd"), (int) message.get("acc")))
-                            .execute(tab -> accountAct(websocket, "signup", tab));
+                            .execute()
+                            .onSuccess(rows -> {
+                                rows.forEach(row -> {
+                                    int max = row.getInteger("max(id)") + 1;
+                                    System.out.println(max);
+                                    sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', %d)".formatted(max, message.get("name"), message.get("pwd"), Integer.parseInt(message.get("acc"))))
+                                            .execute(tab -> {
+                                                websocket.write(bundle2Buffer(new Bundle("signup")));
+                                            });
+                                });
+                            });
                 } else if (message.getName().equals("reset")) {
                     sqlClient.query("UPDATE players.playersInfo SET password = '%s' WHERE name = '%s'".formatted(message.get("pwd"), message.get("name")))
-                            .execute(tab -> accountAct(websocket, "reset", tab));
+                            .execute(tab -> {
+                                websocket.write(bundle2Buffer(new Bundle("reset")));
+                            });
                 } else if (message.getName().equals("match")) {
                     System.out.println(message);
                     String mode = message.get("mode");
