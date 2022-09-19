@@ -44,21 +44,15 @@ public class Server {
                 } else if (message.getName().equals("signup")) {
                     sqlClient.query("select max(id) from players.playersInfo")
                             .execute()
-                            .onSuccess(rows -> {
-                                rows.forEach(row -> {
-                                    int max = row.getInteger("max(id)") + 1;
-                                    System.out.println(max);
-                                    sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', %d)".formatted(max, message.get("name"), message.get("pwd"), Integer.parseInt(message.get("acc"))))
-                                            .execute(tab -> {
-                                                websocket.write(bundle2Buffer(new Bundle("signup")));
-                                            });
-                                });
-                            });
+                            .onSuccess(rows -> rows.forEach(row -> {
+                                int max = row.getInteger("max(id)") + 1;
+                                System.out.println(max);
+                                sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', %d)".formatted(max, message.get("name"), message.get("pwd"), Integer.parseInt(message.get("acc"))))
+                                        .execute(tab -> websocket.write(bundle2Buffer(new Bundle("signup"))));
+                            }));
                 } else if (message.getName().equals("reset")) {
                     sqlClient.query("UPDATE players.playersInfo SET password = '%s' WHERE name = '%s'".formatted(message.get("pwd"), message.get("name")))
-                            .execute(tab -> {
-                                websocket.write(bundle2Buffer(new Bundle("reset")));
-                            });
+                            .execute(tab -> websocket.write(bundle2Buffer(new Bundle("reset"))));
                 } else if (message.getName().equals("match")) {
                     System.out.println(message);
                     String mode = message.get("mode");
