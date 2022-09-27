@@ -145,7 +145,6 @@ public class Server {
                                     Bundle b = new Bundle("roomStop");
                                     p.getSocket().write(bundle2Buffer(b));
                                     rooms.remove(room);
-                                    break;
                                 }
                             }
                         }
