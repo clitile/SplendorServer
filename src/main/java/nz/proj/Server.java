@@ -12,6 +12,7 @@ import io.vertx.sqlclient.PoolOptions;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.SqlClient;
+import org.apache.commons.codec.binary.Base64;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -34,109 +35,87 @@ public class Server {
         Map<String, ArrayList<Player>> waiting = new HashMap<>();
         ArrayList<Room> rooms = new ArrayList<>();
         Random seed = new Random();
-        var server = vertx.createHttpServer().webSocketHandler(websocket -> {
-            websocket.handler(buffer -> {
-                Bundle message = buffer2Bundle(buffer);
-                if (message.getName().equals("login")) {
-                    sqlClient.query("select * from players.playersInfo where name = '%s' and password = '%s'".formatted(message.get("name"), message.get("pwd")))
-                            .execute(tab -> accountAct(websocket, "login", tab));
-                } else if (message.getName().equals("signup")) {
-                    sqlClient.query("select max(id) from players.playersInfo")
-                            .execute()
-                            .onSuccess(rows -> rows.forEach(row -> {
-                                int max = row.getInteger("max(id)") + 1;
-                                System.out.println(max);
-                                sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', '%s')".formatted(max, message.get("name"), message.get("pwd"), message.get("acc")))
-                                        .execute(tab -> websocket.write(bundle2Buffer(new Bundle("signup"))));
-                            }));
-                } else if (message.getName().equals("reset")) {
-                    sqlClient.query("UPDATE players.playersInfo SET password = '%s' WHERE name = '%s'".formatted(message.get("pwd"), message.get("name")))
-                            .execute(tab -> websocket.write(bundle2Buffer(new Bundle("reset"))));
-                } else if (message.getName().equals("match")) {
-                    System.out.println(message);
-                    String mode = message.get("mode");
-                    System.out.println(mode);
-                    if (waiting.containsKey(mode)) {
-                        waiting.get(mode).add(new Player(message.get("name"), websocket));
-                        if (waiting.get(mode).size() >= Integer.parseInt(mode)) {
-                            Player[] players = new Player[Integer.parseInt(mode)];
-                            for (int i = 0; i < Integer.parseInt(mode); i++) {
-                                players[i] = waiting.get(mode).remove(0);
-                            }
-                            Room r = new Room(mode, rooms.size() + 1, players);
-                            int seed_int = seed.nextInt();
-                            rooms.add(r);
-                            for (ServerWebSocket socket : r.getSockets()) {
-                                Bundle bundle = new Bundle("matchFind");
-                                bundle.put("id", r.getId());
-                                bundle.put("players", r.getNames());
-                                bundle.put("next", r.getNames().get(0));
-                                bundle.put("seed", seed_int);
-                                System.out.println("send " + bundle + " to Room " + r.getId());
-                                socket.write(bundle2Buffer(bundle));
-                            }
+        var server = vertx.createHttpServer().webSocketHandler(websocket -> websocket.handler(buffer -> {
+            Bundle message = buffer2Bundle(buffer);
+            if (message.getName().equals("login")) {
+                sqlClient.query("select * from players.playersInfo where name = '%s' and password = '%s'".formatted(message.get("name"), message.get("pwd")))
+                        .execute(tab -> accountAct(websocket, "login", tab));
+            } else if (message.getName().equals("signup")) {
+                sqlClient.query("select max(id) from players.playersInfo")
+                        .execute()
+                        .onSuccess(rows -> rows.forEach(row -> {
+                            int max = row.getInteger("max(id)") + 1;
+                            System.out.println(max);
+                            sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', '%s')".formatted(max, message.get("name"), message.get("pwd"), message.get("acc")))
+                                    .execute(tab -> websocket.write(bundle2Buffer(new Bundle("signup"))));
+                        }));
+            } else if (message.getName().equals("reset")) {
+                sqlClient.query("UPDATE players.playersInfo SET password = '%s' WHERE name = '%s'".formatted(message.get("pwd"), message.get("name")))
+                        .execute(tab -> websocket.write(bundle2Buffer(new Bundle("reset"))));
+            } else if (message.getName().equals("match")) {
+                System.out.println(message);
+                String mode = message.get("mode");
+                System.out.println(mode);
+                if (waiting.containsKey(mode)) {
+                    waiting.get(mode).add(new Player(message.get("name"), websocket));
+                    if (waiting.get(mode).size() >= Integer.parseInt(mode)) {
+                        Player[] players = new Player[Integer.parseInt(mode)];
+                        for (int i = 0; i < Integer.parseInt(mode); i++) {
+                            players[i] = waiting.get(mode).remove(0);
                         }
-                    } else {
-                        waiting.put(mode, new ArrayList<>(){{add(new Player(message.get("name"), websocket));}});
-                    }
-                } else if (message.getName().equals("act")) {
-                    Room room = rooms.get((int)message.get("id") - 1);
-                    for (Player p : room.getPlayers()) {
-                        if (!p.getName().equals(message.get("name"))) {
-                            System.out.println("send " + message + "to " + p.getName());
-                            p.getSocket().write(bundle2Buffer(message));
+                        Room r = new Room(mode, rooms.size() + 1, players);
+                        int seed_int = seed.nextInt();
+                        rooms.add(r);
+                        for (ServerWebSocket socket : r.getSockets()) {
+                            Bundle bundle = new Bundle("matchFind");
+                            bundle.put("id", r.getId());
+                            bundle.put("players", r.getNames());
+                            bundle.put("next", r.getNames().get(0));
+                            bundle.put("seed", seed_int);
+                            System.out.println("send " + bundle + " to Room " + r.getId());
+                            socket.write(bundle2Buffer(bundle));
                         }
                     }
-                } else if (message.getName().equals("roundOver")) {
-                    Room room = rooms.get((int)message.get("id") - 1);
-                    message.put("next", room.getNextName(message.get("name")));
-                    for (Player p : room.getPlayers()) {
-                        if (!p.getName().equals(message.get("name"))) {
-                            System.out.println("send " + message + " to " + p.getName());
-                            p.getSocket().write(bundle2Buffer(message));
-                        }
+                } else {
+                    waiting.put(mode, new ArrayList<>(){{add(new Player(message.get("name"), websocket));}});
+                }
+            } else if (message.getName().equals("act")) {
+                Room room = rooms.get((int)message.get("id") - 1);
+                for (Player p : room.getPlayers()) {
+                    if (!p.getName().equals(message.get("name"))) {
+                        System.out.println("send " + message + "to " + p.getName());
+                        p.getSocket().write(bundle2Buffer(message));
                     }
-                } else if (message.getName().equals("close")) {
-                    String name = message.get("name");
-                    System.out.println(message.get("name") + "log out");
-                    websocket.closeHandler(h -> {
-                        int temp = 0;
-                        for (ArrayList<Player> players : waiting.values()) {
-                            for (Player player : players) {
-                                if (player.getName().equals(name)) {
-                                    temp = 1;
-
-                                    players.remove(player);
-                                    break;
-                                }
-                            }
-                            if (temp == 1) {
-                                temp = 0;
-                                break;
-                            }
-                        }
-
-                        for (Room room : rooms) {
-                            if (room.getNames().contains(name)) {
-                                for (Player p : room.getPlayers()) {
-                                    if (!p.getName().equals(name)) {
-                                        temp = 1;
-                                        Bundle b = new Bundle("roomStop");
-                                        p.getSocket().write(bundle2Buffer(b));
-                                        rooms.remove(room);
-                                        break;
-                                    }
-                                }
-                            }
-                            if (temp == 1) {
-                                break;
-                            }
-                        }
-                    });
-                    websocket.close();
-                } else if (message.getName().equals("roomStop")) {
+                }
+            } else if (message.getName().equals("roundOver")) {
+                Room room = rooms.get((int)message.get("id") - 1);
+                message.put("next", room.getNextName(message.get("name")));
+                for (Player p : room.getPlayers()) {
+                    if (!p.getName().equals(message.get("name"))) {
+                        System.out.println("send " + message + " to " + p.getName());
+                        p.getSocket().write(bundle2Buffer(message));
+                    }
+                }
+            } else if (message.getName().equals("close")) {
+                String name = message.get("name");
+                System.out.println(message.get("name") + "log out");
+                websocket.closeHandler(h -> {
                     int temp = 0;
-                    String name = message.getName();
+                    for (ArrayList<Player> players : waiting.values()) {
+                        for (Player player : players) {
+                            if (player.getName().equals(name)) {
+                                temp = 1;
+
+                                players.remove(player);
+                                break;
+                            }
+                        }
+                        if (temp == 1) {
+                            temp = 0;
+                            break;
+                        }
+                    }
+
                     for (Room room : rooms) {
                         if (room.getNames().contains(name)) {
                             for (Player p : room.getPlayers()) {
@@ -145,6 +124,7 @@ public class Server {
                                     Bundle b = new Bundle("roomStop");
                                     p.getSocket().write(bundle2Buffer(b));
                                     rooms.remove(room);
+                                    break;
                                 }
                             }
                         }
@@ -152,9 +132,28 @@ public class Server {
                             break;
                         }
                     }
+                });
+                websocket.close();
+            } else if (message.getName().equals("roomStop")) {
+                int temp = 0;
+                String name = message.getName();
+                for (Room room : rooms) {
+                    if (room.getNames().contains(name)) {
+                        for (Player p : room.getPlayers()) {
+                            if (!p.getName().equals(name)) {
+                                temp = 1;
+                                Bundle b = new Bundle("roomStop");
+                                p.getSocket().write(bundle2Buffer(b));
+                                rooms.remove(room);
+                            }
+                        }
+                    }
+                    if (temp == 1) {
+                        break;
+                    }
                 }
-            });
-        });
+            }
+        }));
         server.listen(10100, "0.0.0.0");
     }
 
@@ -185,5 +184,15 @@ public class Server {
         } else {
             socket.write(bundle2Buffer(new Bundle("false")));
         }
+    }
+
+    public static String base642String(String baseInfo) {
+        Base64 base = new Base64();
+        return new String(base.decode(baseInfo));
+    }
+
+    public static String string2Base64(String info) {
+        Base64 base = new Base64();
+        return base.encodeToString(info.getBytes());
     }
 }
