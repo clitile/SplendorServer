@@ -2,15 +2,12 @@ package nz.proj;
 
 
 import com.almasb.fxgl.core.serialization.Bundle;
-import io.vertx.core.AsyncResult;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ServerWebSocket;
 import io.vertx.mysqlclient.MySQLConnectOptions;
 import io.vertx.mysqlclient.MySQLPool;
 import io.vertx.sqlclient.PoolOptions;
-import io.vertx.sqlclient.Row;
-import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.SqlClient;
 import org.apache.commons.codec.binary.Base64;
 
@@ -22,6 +19,7 @@ import java.util.Random;
 
 public class Server {
     private static final Vertx vertx = Vertx.vertx();
+    public static ArrayList<String> names = new ArrayList<>();
 
     public static void main(String[] args) {
         MySQLConnectOptions sqlConnOption = new MySQLConnectOptions()
@@ -38,15 +36,26 @@ public class Server {
         var server = vertx.createHttpServer().webSocketHandler(websocket -> websocket.handler(buffer -> {
             Bundle message = buffer2Bundle(buffer);
             if (message.getName().equals("login")) {
-                sqlClient.query("select * from players.playersInfo where name = '%s' and password = '%s'".formatted(message.get("name"), message.get("pwd")))
-                        .execute(tab -> accountAct(websocket, "login", tab));
+                if (names.contains((String) message.get("name"))) {
+                    websocket.write(bundle2Buffer(new Bundle("false")));
+                } else {
+                    sqlClient.query("select * from players.playersInfo where name = '%s' and password = '%s'".formatted(message.get("name"), string2Base64(message.get("pwd"))))
+                            .execute(tab -> {
+                                if (tab.succeeded() && tab.result().size() != 0) {
+                                    names.add(message.getName());
+                                    websocket.write(bundle2Buffer(new Bundle("login")));
+                                } else {
+                                    websocket.write(bundle2Buffer(new Bundle("false")));
+                                }
+                            });
+                }
             } else if (message.getName().equals("signup")) {
                 sqlClient.query("select max(id) from players.playersInfo")
                         .execute()
                         .onSuccess(rows -> rows.forEach(row -> {
                             int max = row.getInteger("max(id)") + 1;
                             System.out.println(max);
-                            sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', '%s')".formatted(max, message.get("name"), message.get("pwd"), message.get("acc")))
+                            sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', '%s')".formatted(max, message.get("name"), string2Base64(message.get("pwd")), message.get("acc")))
                                     .execute(tab -> websocket.write(bundle2Buffer(new Bundle("signup"))));
                         }));
             } else if (message.getName().equals("reset")) {
@@ -80,7 +89,13 @@ public class Server {
                     waiting.put(mode, new ArrayList<>(){{add(new Player(message.get("name"), websocket));}});
                 }
             } else if (message.getName().equals("act")) {
-                Room room = rooms.get((int)message.get("id") - 1);
+                Room room = null;
+                for (Room r : rooms) {
+                    if (r.getId() == (int) message.get("id")) {
+                        room = r;
+                    }
+                }
+                assert room != null;
                 for (Player p : room.getPlayers()) {
                     if (!p.getName().equals(message.get("name"))) {
                         System.out.println("send " + message + "to " + p.getName());
@@ -124,7 +139,6 @@ public class Server {
                                     Bundle b = new Bundle("roomStop");
                                     p.getSocket().write(bundle2Buffer(b));
                                     rooms.remove(room);
-                                    break;
                                 }
                             }
                         }
@@ -152,6 +166,8 @@ public class Server {
                         break;
                     }
                 }
+            } else if (message.getName().equals("cancel")) {
+                waiting.get(message.get("mode").toString()).removeIf(player -> player.getName().equals(message.get("name")));
             }
         }));
         server.listen(10100, "0.0.0.0");
@@ -175,14 +191,6 @@ public class Server {
             return Buffer.buffer(bos.toByteArray());
         } catch (IOException e) {
             throw new RuntimeException(e);
-        }
-    }
-
-    public static void accountAct(ServerWebSocket socket, String act, AsyncResult<RowSet<Row>> tab) {
-        if (tab.succeeded() && tab.result().size() != 0) {
-            socket.write(bundle2Buffer(new Bundle(act)));
-        } else {
-            socket.write(bundle2Buffer(new Bundle("false")));
         }
     }
 
