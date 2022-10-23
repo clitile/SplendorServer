@@ -2,24 +2,28 @@ package nz.proj;
 
 
 import com.almasb.fxgl.core.serialization.Bundle;
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.ServerWebSocket;
 import io.vertx.mysqlclient.MySQLConnectOptions;
 import io.vertx.mysqlclient.MySQLPool;
 import io.vertx.sqlclient.PoolOptions;
+import io.vertx.sqlclient.Row;
+import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.SqlClient;
 import org.apache.commons.codec.binary.Base64;
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 
 public class Server {
     private static final Vertx vertx = Vertx.vertx();
     public static ArrayList<String> names = new ArrayList<>();
+
+    public static HttpServer server = vertx.createHttpServer();
+    public static ArrayList<Room> rooms = new ArrayList<>();
 
     public static void main(String[] args) {
         MySQLConnectOptions sqlConnOption = new MySQLConnectOptions()
@@ -30,10 +34,11 @@ public class Server {
                 .setPassword("158356Proj.");
         SqlClient sqlClient = MySQLPool.client(sqlConnOption, new PoolOptions().setMaxSize(5));
 
+        Map<String, Player> online_players = new HashMap<>();
         Map<String, ArrayList<Player>> waiting = new HashMap<>();
-        ArrayList<Room> rooms = new ArrayList<>();
+//        ArrayList<Room> rooms = new ArrayList<>();
         Random seed = new Random();
-        var server = vertx.createHttpServer().webSocketHandler(websocket -> websocket.handler(buffer -> {
+        server.webSocketHandler(websocket -> websocket.handler(buffer -> {
             Bundle message = buffer2Bundle(buffer);
             if (message.getName().equals("login")) {
                 if (names.contains((String) message.get("name"))) {
@@ -42,7 +47,8 @@ public class Server {
                     sqlClient.query("select * from players.playersInfo where name = '%s' and password = '%s'".formatted(message.get("name"), string2Base64(message.get("pwd"))))
                             .execute(tab -> {
                                 if (tab.succeeded() && tab.result().size() != 0) {
-                                    names.add(message.getName());
+                                    names.add(message.get("name"));
+                                    online_players.put(message.get("name"), new Player(message.get("name"), websocket));
                                     websocket.write(bundle2Buffer(new Bundle("login")));
                                 } else {
                                     websocket.write(bundle2Buffer(new Bundle("false")));
@@ -52,21 +58,26 @@ public class Server {
             } else if (message.getName().equals("signup")) {
                 sqlClient.query("select max(id) from players.playersInfo")
                         .execute()
-                        .onSuccess(rows -> rows.forEach(row -> {
-                            int max = row.getInteger("max(id)") + 1;
-                            System.out.println(max);
-                            sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', '%s')".formatted(max, message.get("name"), string2Base64(message.get("pwd")), message.get("acc")))
-                                    .execute(tab -> websocket.write(bundle2Buffer(new Bundle("signup"))));
-                        }));
+                        .onComplete((AsyncResult<RowSet<Row>> ar) -> {
+                            if (ar.succeeded()) {
+                                ar.result().forEach(row -> {
+                                    int max = row.getInteger("max(id)") + 1;
+                                    System.out.println(max);
+                                    sqlClient.query("insert into players.playersInfo values (%d, '%s', '%s', '%s')".formatted(max, message.get("name"), string2Base64(message.get("pwd")), message.get("acc")))
+                                            .execute(tab -> websocket.write(bundle2Buffer(new Bundle("signup"))));
+                                });
+                            } else {
+                                websocket.write(bundle2Buffer(new Bundle("false")));
+                            }
+                        });
             } else if (message.getName().equals("reset")) {
                 sqlClient.query("UPDATE players.playersInfo SET password = '%s' WHERE name = '%s'".formatted(message.get("pwd"), message.get("name")))
                         .execute(tab -> websocket.write(bundle2Buffer(new Bundle("reset"))));
             } else if (message.getName().equals("match")) {
                 System.out.println(message);
                 String mode = message.get("mode");
-                System.out.println(mode);
                 if (waiting.containsKey(mode)) {
-                    waiting.get(mode).add(new Player(message.get("name"), websocket));
+                    waiting.get(mode).add(online_players.get(message.get("name").toString()));
                     if (waiting.get(mode).size() >= Integer.parseInt(mode)) {
                         Player[] players = new Player[Integer.parseInt(mode)];
                         for (int i = 0; i < Integer.parseInt(mode); i++) {
@@ -86,7 +97,7 @@ public class Server {
                         }
                     }
                 } else {
-                    waiting.put(mode, new ArrayList<>(){{add(new Player(message.get("name"), websocket));}});
+                    waiting.put(mode, new ArrayList<>(){{add(online_players.get(message.get("name").toString()));}});
                 }
             } else if (message.getName().equals("act")) {
                 Room room = null;
@@ -114,6 +125,8 @@ public class Server {
             } else if (message.getName().equals("close")) {
                 String name = message.get("name");
                 System.out.println(message.get("name") + "log out");
+                names.removeIf(s -> s.equals(name));
+                online_players.remove(name);
                 websocket.closeHandler(h -> {
                     int temp = 0;
                     for (ArrayList<Player> players : waiting.values()) {
@@ -168,6 +181,33 @@ public class Server {
                 }
             } else if (message.getName().equals("cancel")) {
                 waiting.get(message.get("mode").toString()).removeIf(player -> player.getName().equals(message.get("name")));
+            } else if (message.getName().equals("friends")) {
+                String[] friends = message.get("friends");
+                System.out.println(Arrays.toString(friends));
+                if (names.containsAll(List.of(friends))) {
+                    Player[] players = new Player[friends.length + 1];
+
+                    for (int i = 0; i < friends.length; i++) {
+                        players[i] = online_players.get(friends[i]);
+                    }
+                    players[friends.length] = online_players.get(message.get("name").toString());
+                    Room r = new Room(Integer.toString(friends.length), rooms.size() + 1, players);
+                    int seed_int = seed.nextInt();
+                    rooms.add(r);
+                    for (ServerWebSocket socket : r.getSockets()) {
+                        Bundle bundle = new Bundle("matchFind");
+                        bundle.put("id", r.getId());
+                        bundle.put("players", r.getNames());
+                        bundle.put("next", r.getNames().get(0));
+                        bundle.put("seed", seed_int);
+                        bundle.put("mode", players.length);
+                        System.out.println("send " + bundle + " to Room " + r.getId());
+                        socket.write(bundle2Buffer(bundle));
+                    }
+                } else {
+                    System.out.println(false);
+                    websocket.write(bundle2Buffer(new Bundle("false")));
+                }
             }
         }));
         server.listen(10100, "0.0.0.0");

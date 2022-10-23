@@ -1,7 +1,6 @@
 package nz.proj;
 
 import io.vertx.core.http.ServerWebSocket;
-import io.vertx.core.net.NetSocket;
 
 public class Player {
     private String name;

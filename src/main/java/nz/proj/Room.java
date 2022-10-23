@@ -1,7 +1,6 @@
 package nz.proj;
 
 import io.vertx.core.http.ServerWebSocket;
-import io.vertx.core.net.NetSocket;
 
 import java.util.ArrayList;
 import java.util.List;
